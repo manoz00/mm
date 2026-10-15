@@ -1,0 +1,665 @@
+# Power Pages Plugin
+
+Create and deploy Power Pages code sites using modern frontend frameworks. This plugin provides a complete workflow — from scaffolding a new site to deploying it, setting up data models, authentication, and Web API integrations — all through conversational AI skills.
+
+**Supported frameworks**: React, Angular, Vue, Astro (static SPAs)
+
+## Installation
+
+### From the marketplace
+
+```bash
+/plugin marketplace add microsoft/power-platform-skills
+/plugin install power-pages@power-platform-skills
+```
+
+### From a local clone
+
+```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+# or
+claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+```
+
+## Hook behavior
+
+The plugin centralizes Claude Code hook registration in `hooks/hooks.json`.
+
+- `PostToolUse` hooks match the `Skill` tool so validation runs when a tracked Power Pages skill completes.
+- Command validators and checklist verification are maintained centrally instead of in per-skill frontmatter.
+
+This keeps hook behavior in one place and avoids relying on skill-frontmatter hook registration.
+
+## Prerequisites
+
+| Prerequisite | Required for | Install |
+|---|---|---|
+| [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
+| [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
+
+## Skills
+
+The plugin provides 36 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, localization, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+
+### Site scaffolding and deployment
+
+#### `/create-site`
+
+> "Create a Power Pages site with React for a job board"
+>
+> "Create a site from a Power Pages SPA template"
+
+Starts a complete code site either from a curated SPA template or from a fresh framework scaffold.
+The template path previews installable templates, imports each selected unmanaged solution, applies optional seed data, activates the site, and opens the live URL.
+Solutions marked `publishChanges` in the template manifest use `pac solution import --publish-changes`; other solutions import without that flag.
+The install confirmation warns that PAC's publication step can include other pending customizations in the target environment.
+Financial seed rows use an explicitly selected existing active currency with their amounts unchanged.
+Declared attachment uploads omit generated file-name fields from record creation, and seed summaries report partial failures explicitly.
+The from-scratch path turns your aesthetic, mood, and optional brand (an existing website, or your colors and logo) into a design thesis and a page-by-page narrative, builds the pages and components with a live preview throughout, and then screenshots every page at desktop and mobile widths and refines it against a ten-category design rubric before the accessibility audit.
+
+- Start from a curated SPA template or scaffold from scratch
+- Choose from React, Vue, Angular, or Astro
+- Suggests the selected Dataverse environment's base language for site content,
+  with a silent `en-US` fallback when the environment cannot be queried
+- Renders the implementation plan in the selected content language, including
+  correct `lang`/`dir` metadata and an RTL-safe layout
+- Separates deterministic agent verification from linguistic, cultural, brand,
+  and visual checks that require maker review
+- Every visible or interactive component is classified for bidirectional
+  behavior, with applicable states and desktop/narrow viewports planned
+  separately; direction-neutral layouts work with LTR and RTL from the start
+- Script-aware fonts, locale-aware formatting, and mixed-direction content safety
+- Real images from Unsplash (no placeholders)
+- Live browser preview during development
+- Git commits at each milestone
+
+#### `/deploy-site`
+
+> "Deploy my site to Power Pages"
+
+Builds your project and uploads it to your Power Pages environment using `pac pages upload-code-site`. Handles common blockers like JavaScript attachment restrictions.
+
+- Verifies PAC CLI installation and authentication
+- Confirms target environment before deploying
+- Creates `.powerpages-site` folder with deployment artifacts
+
+#### `/activate-site`
+
+> "Activate my site"
+
+Provisions a website record in your Power Platform environment so your site is accessible at a public URL.
+
+- Generates a subdomain suggestion (you choose the final name)
+- Polls provisioning status until the site is live
+- Provides the final site URL
+
+#### `/test-site`
+
+> "Test my deployed site at <https://contoso.powerappsportals.com>"
+
+Runtime-tests a deployed, activated site using a real browser (via the bundled Playwright MCP). Crawls discoverable links, verifies pages render, captures network traffic for API calls, and produces a test report.
+
+- Browser-based navigation and page crawling
+- Network request verification for Web API / Server Logic / Cloud Flow endpoints
+- Console and network error capture
+- Screenshots on failure
+
+Create-site and add-localization also run a component-scoped rendered
+bidirectional audit against their development preview. It verifies computed
+direction, overflow, clipping, focus order, portals/overlays, applicable
+states and viewports, and runtime locale round trips. The run report is
+validation evidence rather than a second component manifest. Deterministic
+errors keep affected locales unavailable. Only usable review-severity
+limitations can be enabled after the maker sees the exact impact and evidence;
+that approval is recorded in the localization manifest.
+
+### Data modeling
+
+#### `/setup-datamodel`
+
+> "Create Dataverse tables for my site"
+
+Analyzes your site's requirements and creates Dataverse tables, columns, and relationships via OData API calls.
+
+- Spawns a **Data Model Architect** agent that proposes tables based on your site's code
+- Alternatively, you can upload an ER diagram
+- Generates a `.datamodel-manifest.json` used by downstream skills
+- Visualizes the data model as a Mermaid ER diagram
+
+#### `/add-sample-data`
+
+> "Add sample data to my tables"
+
+Populates your Dataverse tables with realistic, contextually appropriate records.
+
+- Reads table definitions from `.datamodel-manifest.json` or queries OData metadata
+- Generates values that match column types and names (emails, dates, currencies, etc.)
+- Inserts records in dependency order (parent tables first)
+
+### Backend integration
+
+#### `/integrate-backend`
+
+> "I need to send a confirmation email when someone submits the contact form"
+
+Router skill that analyzes your business problem and recommends the right backend approach — Web API, Server Logic, Cloud Flow, or a combination — then hands off to the specialized skill(s). Use this as the entry point when you're not sure which integration path fits your scenario.
+
+- Generates a visual backend plan (HTML) with the recommended approach and trade-offs
+- Routes to `/integrate-webapi`, `/add-server-logic`, or `/add-cloud-flow`
+- Supports multi-approach plans (e.g., Web API for CRUD + Cloud Flow for notifications)
+
+#### `/integrate-webapi`
+
+> "Connect my site to the Dataverse tables"
+
+Orchestrates the full Web API integration lifecycle — from analyzing your site's code to identify where data is needed, through generating typed API code for each table, to configuring table permissions and site settings so the APIs work in production.
+
+The skill first scans your codebase to find components using mock data, placeholder fetch calls, or hardcoded arrays, then maps them to your Dataverse tables. It processes each table sequentially, spawning a dedicated **Web API Integration** agent that creates the integration code. After all tables are wired up, a **Table Permissions** agent proposes CRUD permissions and scopes, and a **Web API Settings** agent proposes site settings with case-sensitive validated column names queried directly from Dataverse — or you can upload your own permissions diagram instead.
+
+**What gets created:**
+
+- Shared `powerPagesApi.ts` client with anti-forgery token management, OData URL builder, and exponential backoff retry logic
+- TypeScript entity types and domain mappers per table
+- CRUD service layer per table using `/_api/` endpoints with dual token headers and `@odata.bind` for lookups
+- Framework-specific patterns: React hooks, Vue composables, Angular injectable services
+- Table permission YAML files and site setting YAML files with explicit validated column lists
+
+**What gets updated:**
+
+- Existing components are refactored to use real API calls (mock data and placeholder fetches are replaced)
+- `.powerpages-site/table-permissions/` and `.powerpages-site/site-settings/` directories are populated for deployment
+
+#### `/add-ai-webapi`
+
+> "Add AI summaries to my site"
+
+Integrates Power Pages generative-AI summarization APIs into a Single Page Application (SPA) site: the **Search Summary API** (`/_api/search/v1.0/summary`) and the **Data Summarization API** (`/_api/summarization/data/v1.0/...`). Data Summarization can be configured for any record-detail or list page; Microsoft documents one ready-made recipe for a Copilot-style summary on a support-case detail page (`incident` table with `$select=description,title` and the portal-comments expand) — that recipe is available as a maker pick, not an automatic recommendation.
+
+The skill scans your code for search pages and record-detail / list pages and proposes which APIs to wire where. For any Data Summarization target that is missing its Web API prerequisites (Layer 1 `Webapi/<table>/*` settings, Layer 2 table permissions, or the shared `powerPagesApi.ts` client), the skill delegates to `/integrate-webapi` in an **AI-only read mode** — read-only permissions, minimal fields list (no primary key, only `_<col>_value` for lookups) — and to `/create-webroles` if no web role exists yet. Once Layer 1/2 is in place, the skill spawns the **AI Web API Integration** agent sequentially per target to create a single summarization service (`fetchSearchSummary`, `fetchDataSummary`) with correct CSRF handling, a framework-idiomatic wrapper, and real UI call sites. Finally, the **AI Web API Settings Architect** is invoked for Layer 3 to propose the `Summarization/Data/Enable` toggle and per-prompt `Summarization/prompt/<identifier>` settings.
+
+**What gets created:**
+
+- `src/services/aiSummaryService.ts` (or extended if it already exists) with raw `fetch` + both required CSRF headers
+- Framework-specific wrapper (React hook / Vue composable / Angular service)
+- Real call sites in the target page(s) with loading, error, and recommendation-button handling
+- `Summarization/Data/Enable` site setting and one `Summarization/prompt/<identifier>` per prompt
+- `Webapi/<table>/enabled` / `Webapi/<table>/fields`, read-only table permissions, and the shared `powerPagesApi.ts` client for the summarised tables and every `$expand` target (delegated to `/integrate-webapi`)
+
+#### `/add-server-logic`
+
+> "Move my pricing calculation out of the browser and onto the server"
+
+Creates and manages Power Pages Server Logic — server-side JavaScript that runs securely on the Power Pages runtime. Covers the full lifecycle: gathering requirements, fetching Microsoft Learn docs for reference, implementing the handler, configuring site settings, and deploying.
+
+- Grounded in live Microsoft Learn docs (via the bundled MCP)
+- Generates the server-side handler and its deployment metadata
+- Wires up the client-side call site in your frontend code
+- Handles site-setting flags required to enable Server Logic
+
+#### `/add-cloud-flow`
+
+> "When a user submits an application, kick off my existing approval flow"
+
+Integrates Power Automate cloud flows into a Power Pages site. Discovers flows available in the environment, suggests relevant ones for your intent, identifies scenarios and web roles, creates flow metadata, and generates the client-side code to invoke the flow.
+
+- Lists available cloud flows in the environment
+- Handles both new flow registration and adding already-registered flows to additional pages
+- Generates metadata files and client-side call-site code
+- Configures web role access for the flow
+
+### Security and access
+
+#### `/create-webroles`
+
+> "Create web roles for my site"
+
+Generates web role YAML files in your `.powerpages-site` directory for managing user access.
+
+- Discovers existing roles before creating new ones
+- Generates proper UUIDs for each role
+- Enforces uniqueness constraints (one anonymous role, one authenticated role)
+
+#### `/setup-auth`
+
+> "Set up authentication for my site"
+
+Adds login/logout functionality and role-based authorization to your site.
+
+- Auth service with anti-forgery token handling
+- Login/logout UI component
+- Role-based UI patterns (show/hide elements by role)
+- Framework-specific implementation (hooks, composables, services)
+- **IDP app-registration setup for OIDC providers** (Okta, Auth0, Microsoft Entra External ID, and other OpenID Connect) — reads the provider's own documentation first, then **guides the user through the provider's console** or, **when the provider supports it, configures the app for the user**; either way it wires the client ID, authority, and claims mapping (registration + login) into Power Pages using the platform-default no-secret `code id_token` flow
+
+#### `/audit-permissions`
+
+> "Check my table permissions for security issues"
+
+Audits existing table permissions on a deployed or in-progress site against the site code and local metadata, querying live Dataverse relationship metadata only when a reachable flow has unresolved dependencies. Produces a visual HTML audit report with a verdict, category scores, and suggested fixes.
+
+- Each issue rated **major** or **minor**, with a Safe to go / Needs revision verdict and 1–5 scores for over-exposure, under-exposure, and correctness
+- Each major issue labelled permissions-only or caused upstream (data model, site code, or Web API settings)
+- Cross-references code usage, web roles, sign-up settings, and Dataverse schema, and suggests a concrete fix for each issue
+
+#### `/scan-site`
+
+> "Scan my production site for vulnerabilities"
+
+Runs a security scan on a deployed Power Pages site, fetches the latest scan report, and produces a plain-language summary of vulnerabilities by severity.
+
+- Scans the live site's public surface for vulnerabilities
+- Fetches and explains the latest scan report
+- Surfaces issues grouped by severity
+
+#### `/scan-code`
+
+> "Check my source code and dependencies for security issues"
+
+Scans a Power Pages site project's source files and dependencies for security problems — static analysis of the code plus dependency, secret, and license scanning — then surfaces findings in plain language.
+
+- Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
+- Groups findings by category — code patterns, vulnerable packages, secrets, licenses
+- Offers an agent-driven review fallback when the scanning tools are not installed
+
+#### `/manage-firewall`
+
+> "Block traffic from a specific country and add a rate limit to /login"
+
+Inspects and configures the web application firewall (WAF) in front of a Power Pages production site. Walks you through enabling protection and managing custom rules.
+
+- Lists current WAF state and recommends enabling protection when off
+- Adds, updates, or removes custom rules — IP blocks, country blocks, path blocks, rate limits
+- Protects pages from brute-force attempts and bot traffic
+
+#### `/manage-headers`
+
+> "Fix my CSP errors and harden cookie settings"
+
+Inspects and configures the security headers a Power Pages site sends to browsers — Content Security Policy, frame and clickjacking protection, cross-origin sharing, cookie behavior, and related site settings.
+
+- Identifies gaps in browser security headers
+- Walks through fixes for CSP, CORS, cookies, and embedding policy
+- Updates the corresponding site settings
+
+#### `/security-review`
+
+> "Do a full security review before we ship"
+
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering source code and dependencies, the live site, browser headers, firewall, authentication, and role-based permissions.
+
+- Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Consolidates findings into a single HTML report
+- Suitable for release-readiness or live-site monitoring
+
+### ALM and CI/CD
+
+#### `/plan-alm`
+
+> "Plan how to promote this site to staging and production"
+
+Planner skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, then generates a visual HTML plan for your review and approval. **It does not deploy anything itself** — after you approve the plan, you run the individual ALM skills, which detect the plan and execute the right step in order.
+
+- Detects project state (config, manifests, current environment)
+- Branched flow for Power Platform Pipelines or manual export/import
+- Generates `docs/alm-plan.html` for review and approval (the recommended execution sequence is the plan of record)
+- Recommends the skill sequence to run next — `setup-solution`, `setup-pipeline`/`export-solution`, `deploy-pipeline`/`import-solution` — each of which detects this plan, proceeds, and keeps it updated as it runs
+
+> [!TIP]
+> `/plan-alm` is the front door for any ALM intent — run it first to produce the plan. It plans only; you then run the execution skills it recommends. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
+
+#### `/setup-solution`
+
+> "Package my site into a solution for ALM"
+
+Creates a Dataverse publisher and solution, then adds Power Pages site components to the solution for ALM and deployment management.
+
+- Creates publisher and solution via OData API (with duplicate detection)
+- Adds website and web role components via `AddSolutionComponent`
+- Writes `.solution-manifest.json` for downstream skills
+- Publisher prefix is irreversible — requires explicit confirmation
+
+#### `/export-solution`
+
+> "Export the solution as a zip for deployment"
+
+Exports a Dataverse solution containing Power Pages site components as a zip file, ready for deployment to another environment.
+
+- Choose managed (locked for downstream environments) or unmanaged (editable)
+- Triggers `ExportSolutionAsync` and polls until complete
+- Bumps the solution version on every export so each zip is strictly increasing
+- Verifies the zip contains a valid `Solution.xml`
+
+#### `/import-solution`
+
+> "Import this solution zip into the staging environment"
+
+Imports a Dataverse solution zip into a target environment, with optional staged import for dependency checking before committing.
+
+- Optional `StageSolution` pre-flight to detect missing dependencies
+- `ImportSolutionAsync` with polling until complete
+- Writes `docs/alm/last-import.json` marker
+- Surfaces per-component import results
+
+#### `/setup-pipeline`
+
+> "Set up a Power Platform Pipeline for automated deployments"
+
+Sets up a Power Platform Pipeline for automated Power Pages deployments. Power Platform Pipelines is Microsoft's native CI/CD tool built into the platform — no external infrastructure required.
+
+- Auto-discovers host environment via `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')`
+- Creates `deploymentenvironments`, `deploymentpipelines`, and `deploymentstages` records
+- GitHub Actions and Azure DevOps platforms show coming-soon guidance
+- Writes `docs/alm/last-pipeline.json` and `docs/pipeline-setup.md`
+
+#### `/deploy-pipeline`
+
+> "Deploy the site to staging via my pipeline"
+
+Triggers a Power Platform Pipeline deployment run for a Power Pages solution. Validates the package, optionally configures deployment settings, then deploys and polls for completion.
+
+- Pre-flight check on `blockedattachments` to proactively unblock `.js`/`.css` (saves a wasted ~60-min import)
+- `ValidatePackageAsync` before deploying surfaces validation issues early
+- Optional environment variable / connection reference overrides per stage
+- Final consent gate before the deploy actually fires
+
+#### `/ensure-pipelines-host`
+
+> "Make sure my tenant has a Power Platform Pipelines host"
+
+Ensures the tenant has a usable Power Platform Pipelines host environment before any pipeline operation runs. Detects host state via the same resolution order as the Power Apps UI; if no host is bound, provisions a new **Platform Host** (recommended, idempotent) or guides through a **Custom Host** install.
+
+- Detects host state from org-db setting, BAP env metadata, or default-custom-host setting
+- Idempotent Platform Host fast-path (~3–5 min)
+- Custom Host fast-path or manual PPAC install fallback
+- Writes a host-check artifact other ALM skills consume
+
+#### `/force-link-environment`
+
+> "This environment is already linked to another pipelines host — force-link it"
+
+Force-links a development or target environment to a Power Platform Pipelines host, overriding any existing association with a previous host. Calls the documented `ManageEnvironmentStamp` Dataverse action (the API behind the "Force Link" button in the Deployment Pipeline Configuration app).
+
+- Use when you hit "environment is already associated with another pipelines host"
+- Required explicit consent gate — destructive to the previous host (makers lose pipeline access)
+- Reversible by re-running from the previous host
+- Writes `docs/alm/last-force-link.json`
+
+#### `/configure-env-variables`
+
+> "Make these site settings environment-specific so they differ between dev and prod"
+
+Configures environment variables for Power Pages site settings to support ALM across environments. Creates environment variable definitions in Dataverse, guides you through linking site settings via the Power Pages Management app, adds the variables to the solution, and generates a `deployment-settings.json` file with per-stage override values.
+
+- Creates `environmentvariabledefinition` records (String or Secret type)
+- Generates `deployment-settings.json` ready for `deploy-pipeline` to consume
+- Routes credentials (ClientSecret, ConsumerKey, etc.) to Key Vault-backed secret env vars
+
+#### `/diagnose-deployment`
+
+> "My last deploy failed — figure out why"
+
+Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-matches against a known failure catalog, and optionally auto-fixes identified issues.
+
+- Re-runs `pac pages upload-code-site` in capture mode to surface upload errors
+- Queries recent Dataverse async operation failures
+- Pattern matches against `references/deployment-error-catalog.md`
+- Offers auto-fixes with explicit per-fix user confirmation
+
+### Polish
+
+#### `/exceptional-web-design`
+
+> "Review the design of https://contoso.powerappsportals.com"
+>
+> "Why does my site look generic? What should I change?"
+
+Reviews the design of an existing site - a live URL or a local project folder - and tells you what to change, without changing anything.
+It captures up to eight key pages at desktop and mobile widths, runs an accessibility audit, and scores the site against the same ten-category design rubric `/create-site` builds to. Pages beyond that are listed in the report so you can ask for them next.
+The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
+
+- Works from a URL (pages are discovered from the site's navigation) or from a project folder, which it reads alongside a URL where the site runs - the deployed site or a dev server you start - or on its own for a code-only review
+- Runs nothing from your project and changes nothing in it: screenshots go to a temporary folder outside the project, and nothing is installed
+- Pages that require sign-in are listed as not reviewed, because the capture cannot sign in
+
+#### `/add-localization`
+
+> "Add French and German to my site"
+
+Adds or extends multilingual localization for React, Vue, and Angular runtime
+Power Pages code-site SPAs. Astro and Angular static localization are
+temporarily unavailable.
+
+- Detects and preserves existing localization configuration and translations
+- Renders and opens a persistent `docs/add-localization-plan.html` in the
+  site's current source language before the terminal approval gate
+- Validates canonical BCP-47 language tags against the bundled IANA registry
+- Centralizes mode availability: React, Vue, and Angular runtime are active;
+  Angular static and Astro static remain dormant for future re-enablement
+- Generates translations with the agent or creates blank values for manual
+  completion
+- Resolves direction from each locale's writing script, including languages
+  written in multiple scripts
+- Audits every added locale independently, classifies the existing components
+  and their applicable states/viewports, and regression-tests shared
+  direction-sensitive changes without redesigning unrelated branding or
+  behavior
+- Adds an accessible language selector with fallback and safe runtime LTR/RTL
+  switching; runtime React, Vue, and Angular sites use a locale coordinator
+- Keeps only proven affected locales unavailable for later remediation while
+  preserving previously verified locales, or records explicit approval for
+  usable non-blocking limitations
+- Revalidates localization resources, bidirectional source rules, and text-expansion risks after
+  later UI-modifying skills and again before deployment
+- Localizes only the SPA UI; it does not enable Dataverse environment languages
+
+#### `/add-seo`
+
+> "Add SEO to my site"
+
+Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta tags (Open Graph, Twitter Cards).
+
+- Auto-discovers routes from your framework's router
+- Generates sitemap with production URLs
+- Adds viewport, charset, description, and social sharing meta tags
+
+### Migration
+
+#### `/migrate-bootstrap`
+
+> "Upgrade my Power Pages site from Bootstrap 3 to Bootstrap 5"
+
+Migrates a traditional Power Pages site (Liquid web templates, not code sites) from Bootstrap 3 to Bootstrap 5. Runs the `pac pages bootstrap-migrate` engine for the bulk class renames, then assists with the residual hierarchy/CSS fixes the engine can only flag.
+
+- Non-destructive: the engine writes a new `<folder>V5` copy and never edits the source
+- AI-assisted per-category fixes for grid, navbar, panel/card, and page-header changes
+- Uploads (auto-enabling the Bootstrap 5 runtime flag) and verifies the flip via `pac-log.txt`
+
+#### `/migrate-webapi-selectall`
+
+> "Replace every wildcard Web API fields setting with the columns my site actually uses"
+
+Reviews every authored Power Pages Web API source call and response consumer, maps entity sets through Dataverse metadata, and replaces deprecated `Webapi/<table>/fields = *` values with evidence-backed explicit columns. Compiled and generated output is excluded. Works with both traditional/Liquid sites and React, Vue, Angular, or Astro SPA sites.
+
+- Reports every wildcard with its exact proposed fix and every already-explicit configuration
+- Adds missing `$select` projections where normal record reads relied on implicit selection
+- Traces every call site reaching a table, including duplicated wrappers and differing query shapes
+- Verifies all configuration scopes and deployment profiles contain zero wildcards
+
+### Support
+
+#### `/report-issue`
+
+> "Report a bug with the create-site skill"
+
+Collects context about the current session and opens a pre-filled GitHub issue against [microsoft/power-platform-skills](https://github.com/microsoft/power-platform-skills/issues).
+
+- Captures the skill(s) involved and recent error messages
+- Attaches relevant file paths and environment info
+- Opens the issue in your browser for final review
+
+#### `/telemetry`
+
+> "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
+
+Enables, disables, or checks the status of usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+
+- `/power-pages:telemetry status` — show the current setting
+- `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
+- `/power-pages:telemetry on` — resume sending telemetry
+- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
+- Records approved create-site/localization choices, canonical locales, public package names/versions, and stable validation outcomes; never records site names, prompts, paths, free-text requirements, credentials, private-use locale subtags, or raw errors
+- Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
+
+## Agents
+
+The plugin includes 6 specialized agents that are spawned automatically by skills when needed:
+
+| Agent | Purpose | Triggered by |
+|---|---|---|
+| **Data Model Architect** | Analyzes your site and proposes a Dataverse data model with an ER diagram | `/setup-datamodel` |
+| **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, when it delegates) |
+| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode); `/audit-permissions` |
+| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode) |
+| **AI Web API Integration** | Creates raw-`fetch` summarization service with CSRF, framework wrapper, and UI wiring | `/add-ai-webapi` |
+| **AI Web API Settings Architect** | Proposes `Summarization/Data/Enable` and maker-defined `Summarization/prompt/<identifier>` site settings | `/add-ai-webapi` |
+
+The Data Model Architect, Table Permissions, and Web API Settings agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
+
+## Bundled MCP servers
+
+The plugin ships with two MCP servers configured in `.mcp.json` — they start automatically when the plugin loads:
+
+| Server | Purpose
+|---|---|
+| **playwright** | Headless browser automation for live previews and runtime tests |
+| **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs |
+
+The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAUDE_PLUGIN_ROOT` (Claude Code). The Playwright bootstrap resolves its launcher only from that declared plugin root and never from the workspace working directory.
+
+## Typical Workflow
+
+A common end-to-end workflow looks like this:
+
+```
+1.  /create-site            →  Start from a SPA template or scaffold + design + build pages
+2.  /deploy-site            →  Upload to Power Pages environment
+3.  /activate-site          →  Provision a public URL
+4.  /setup-datamodel        →  Create Dataverse tables
+5.  /add-sample-data        →  Populate tables with test records
+6.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
+7.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
+8.  /create-webroles        →  Define access roles
+9.  /setup-auth             →  Add login/logout + role-based UI
+10. /audit-permissions      →  Verify table permissions are safe
+11. /add-localization       →  Add SPA languages and a language selector
+12. /add-seo                →  Search engine optimization
+13. /deploy-site            →  Push final changes live
+14. /test-site              →  Runtime smoke test on the live URL
+15. /security-review        →  Full security review (headers, firewall, scan, permissions)
+16. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
+17. /setup-solution         →  Package the site into a Dataverse solution
+18. /setup-pipeline         →  Set up the Power Platform pipeline
+19. /deploy-pipeline        →  Promote through staging → production (run per stage)
+```
+
+> Steps 17–19 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
+
+Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
+
+## Runtime approvals
+
+Keep your AI host's runtime approval prompts enabled while using this plugin.
+Plugin scripts run on your workstation with the filesystem access and cloud sign-in state available to your user account.
+A script that invokes `pac` or `az` may therefore act on Power Platform environments, Dataverse data, and Azure tenants that you can access.
+
+Before approving a command, check the executable, script path, arguments, and target environment.
+Pay particular attention to commands that read or change project files, environment configuration, tenant resources, or business data.
+Do not grant blanket approval to command families such as `node`, `npm`, `git`, `pac`, or `az`.
+
+If your host supports command-specific allow rules, use them only for an exact plugin script path that you have inspected and expect to run.
+Keep approval prompts for commands whose arguments or environment variables select a project, environment, tenant, or data source.
+Permission features and rule syntax vary by host and version, so follow the documentation for your host.
+Suppressing an approval prompt does not sandbox a script, restrict the programs it can start, or guarantee that the command is safe.
+
+## ALM prompts you may see
+
+Several skills now ask about solution identity, orphan components, and pre-export completeness. These prompts catch a real class of bugs where Dataverse records silently stay behind in the `Default` solution. See **[`references/alm-prompts.md`](references/alm-prompts.md)** for a user-facing walkthrough of each prompt and how to respond.
+
+## Documentation
+
+- [Power Pages AI Plugin Documentation](https://learn.microsoft.com/power-pages/configure/create-code-site-using-claude-code)
+- [Power Pages Code Sites](https://learn.microsoft.com/power-pages/configure/create-code-sites)
+- [PAC CLI Reference](https://learn.microsoft.com/power-platform/developer/cli/reference/pages)
+- [Power Pages REST API](https://learn.microsoft.com/rest/api/power-platform/powerpages/websites)
+- [Dataverse Web API](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/overview)
+- [Bidirectional design standard](references/bidirectional-design.md)
+- [ALM prompts — user guide](references/alm-prompts.md)
+
+## Testing validator scripts
+
+Run the validator unit tests with Node's built-in test runner:
+
+```bash
+node --test plugins/power-pages/scripts/tests/
+```
+
+To validate table-permission relationship names against live Dataverse metadata during local testing, run:
+
+```bash
+node plugins/power-pages/scripts/validate-permissions-schema.js --projectRoot /path/to/site --validate-dataverse-relationships --envUrl https://your-org.crm.dynamics.com
+```
+
+This Dataverse relationship check is intended for local validation only and should not be used in CI.
+
+## Telemetry & privacy
+
+This plugin sends usage telemetry by default to help Microsoft improve it.
+Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
+When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
+The generic skill invocation event records when `audit-permissions` starts. Its
+completion event records a random per-run ID, success or failure, elapsed
+duration, and aggregate report metrics under `eventInfo.auditPermissions`. A
+successful run means the final HTML report was generated and passed semantic
+validation. The aggregate metrics contain only fixed major/minor counts,
+category scores, dimension counts, and root-cause counts. They never include
+site, environment, tenant, user, table, role, permission, path, finding text, or
+report content. This identity-free completion event uses the configured default
+telemetry region.
+Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
+It also records approved create-site and localization choices, canonical locales, public localization package/version choices, stable validation failure codes, and localization completion data.
+Events do not include file paths, prompts, tool inputs, site names, free-text requirements, Dataverse URLs, credentials, usernames, hostnames, private-use locale subtags, evidence URLs, or raw errors.
+
+**Turn it on or off (per-user, applies to every project):**
+
+```bash
+/power-pages:telemetry status   # show the current setting
+/power-pages:telemetry off      # stop sending telemetry
+/power-pages:telemetry on       # resume sending telemetry
+```
+
+When **off**, nothing leaves your machine. A local diagnostic copy containing the
+same event fields, including available organization, tenant, and Entra object IDs,
+is still written under
+`~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
+so you can see exactly what would have been sent; delete it anytime. Run
+`/power-pages:telemetry status` to see the logs directory and the most recent
+session file. The setting is stored at `~/.power-platform-skills/config.json`
+(`{ "telemetry": { "power-pages": "off" } }`).
+
+For automation / CI, set the per-plugin opt-out environment variable instead of
+editing that file:
+
+```bash
+POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1   # stop sending telemetry
+```
+
+Set it to `1` or `true` (dotnet `*_TELEMETRY_OPTOUT` convention). This opt-out has
+the **highest precedence** — it overrides a saved `/power-pages:telemetry` choice
+and even `/power-pages:telemetry on`. Like `off` from the command, it suppresses
+transmission only — the local per-session `events.jsonl` mirror is still written.
+
+## License
+
+[MIT](../../LICENSE)

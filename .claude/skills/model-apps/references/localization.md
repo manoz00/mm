@@ -1,0 +1,210 @@
+# Localization Reference
+
+> **Scope: generated PAGE code, not Dataverse metadata.** This file covers translating the React
+> pages `/genpage` writes — translation dictionaries, RTL, and user-settings-driven number/date
+> formatting. It does **not** cover Dataverse table, column or choice **labels**. Those are set per
+> field: a plain string uses the build-wide authoring language (`languageCode`), or write the field
+> as an LCID map to label it in several languages at once. There is no per-table language
+> (see `app-spec-schema.md` → `languageCode` and *Localized labels*).
+
+Read this only when the planner has detected multiple configured languages OR any
+non-English language via `scripts/list-languages.js` (or `pac model list-languages --environment '<envUrl>'`, which the planner
+runs when that script cannot read them). English-only environments
+should skip this entire file — the page-builder will write the page without any
+localization scaffolding.
+
+The page-builder agent reads this conditionally based on the plan's `Environment`
+section, not unconditionally.
+
+## Localization
+
+### When to Apply
+
+Only apply localization when `scripts/list-languages.js` (run by the planner during requirements gathering; its fallback is `pac model list-languages --environment '<envUrl>'`) reports **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+
+### Language Detection
+
+Detect the user's UI language at component mount using the Xrm global context:
+
+```typescript
+const language = React.useMemo(() => {
+  const uiLanguageId = (typeof Xrm !== "undefined" &&
+    Xrm.Utility?.getGlobalContext()?.userSettings?.languageId) || 1033;
+  const langMap: Record<number, { code: string; name: string; isRtl: boolean }> = {
+    // One entry per language in the plan's `## Environment` → `Languages` line, e.g.
+    //   English (1033, en-US); Arabic (Saudi Arabia) (1025, ar-SA) — RTL
+    // becomes 1033: { code: "en-US", name: "English", isRtl: false } and
+    // 1025: { code: "ar-SA", name: "Arabic (Saudi Arabia)", isRtl: true }.
+    // `isRtl` is true exactly where the line carries `— RTL` (see RTL Layout Support) — never from memory.
+    // A language the plan lists with no code has nothing to key a translation by: it gets no entry, and the
+    // fallback below serves that user in English.
+  };
+  return langMap[uiLanguageId] || { code: "en-US", name: "English", isRtl: false };
+}, []);
+```
+
+### Translation Dictionary
+
+Create a translations dictionary with entries for every language detected in Step 2. All user-visible text must come from this dictionary — **NEVER hardcode display text in JSX**.
+
+**IMPORTANT:** Do NOT put date formats, currency symbols, or number formats in the translations dictionary. These MUST come from the user's Dataverse `usersettings` via `dataApi` (see User Settings for Formatting section below).
+
+```typescript
+const translations: Record<string, Record<string, string>> = {
+  "en-US": {
+    title: "Dashboard",
+    save: "Save",
+    cancel: "Cancel",
+    // ... all user-visible strings
+  },
+  "ar-SA": {
+    title: "لوحة القيادة",
+    save: "حفظ",
+    cancel: "إلغاء",
+  },
+  // ... one entry per detected language
+};
+
+const translate = (key: string): string =>
+  translations[language.code]?.[key] || translations["en-US"]?.[key] || key;
+```
+
+Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
+
+### RTL Layout Support
+
+Take each language's direction from the `rtl` field of `scripts/list-languages.js` (carried into the
+plan's `## Environment` → `Languages` line as a `— RTL` mark; when the planner fell back to `pac model list-languages --environment '<envUrl>'`,
+from that table's RTL column) — never from a hand-written list of LCIDs. The script reads
+it from a table of Windows culture data, and a list always misses some: Windows culture data marks more than 40
+right-to-left cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
+Kurdish, Hebrew and Yiddish among them — and a language a list forgot renders left-to-right.
+
+If the plan marks no direction for a language (a plan written before the script reported one), compute the flag from
+the language's **Code** instead. Direction is a
+property of the script a language is written in, and `Intl.Locale#maximize()` fills in the likely script
+from CLDR (`fa` → `fa-Arab-IR`, `ur-PK` → `ur-Arab-PK`, `dv-MV` → `dv-Thaa-MV`):
+
+```typescript
+// ISO 15924 scripts written right-to-left.
+const RTL_SCRIPTS = new Set(["Arab", "Hebr", "Syrc", "Thaa", "Nkoo", "Adlm", "Rohg", "Mand", "Samr"]);
+const isRtlLocale = (code: string): boolean => {
+  try {
+    // `Intl.Locale` is typed only from the ES2020 lib, so the cast keeps an older `lib` setting compiling.
+    return RTL_SCRIPTS.has(new (Intl as any).Locale(code).maximize().script ?? "");
+  } catch {
+    return false; // not a valid BCP-47 tag
+  }
+};
+```
+
+- Wrap the root element with the `dir` attribute: `<div dir={language.isRtl ? "rtl" : "ltr"}>`.
+- Use **logical CSS properties** instead of physical ones:
+  - `marginInlineStart` / `marginInlineEnd` (not `marginLeft` / `marginRight`)
+  - `paddingInlineStart` / `paddingInlineEnd` (not `paddingLeft` / `paddingRight`)
+  - `insetInlineStart` / `insetInlineEnd` (not `left` / `right`)
+  - `borderInlineStart` / `borderInlineEnd` (not `borderLeft` / `borderRight`)
+  - `textAlign: "start"` / `textAlign: "end"` (not `"left"` / `"right"`)
+- For flexbox, use `flexDirection: language.isRtl ? "row-reverse" : "row"` only when logical properties are insufficient.
+
+### User Settings for Formatting
+
+**MANDATORY:** Fetch user formatting preferences from the `usersettings` system table via `dataApi`. This is required even for mock data pages — `usersettings` is always available.
+
+Retrieve these columns: `uilanguageid`, `localeid`, `decimalsymbol`, `numberseparator`, `currencysymbol`, `dateformatstring`, `dateseparator`.
+
+```typescript
+// Cache user settings on `window` + de-dupe the host double-mount so we retrieve
+// them once (see references/data-caching.md). Keyed globally — settings are
+// per-user and stable for the session.
+const winAny = window as unknown as Record<string, unknown>;
+const SETTINGS_KEY = "__ppUserSettings";
+const SETTINGS_INFLIGHT = "__ppUserSettingsInflight";
+
+const [userSettings, setUserSettings] = React.useState<any>(
+  () => (winAny[SETTINGS_KEY] as any) ?? null,
+);
+const dataReady = !!dataApi;   // never depend on `dataApi` itself — see Rule 15
+
+React.useEffect(() => {
+  if (!dataReady) return;
+  if (winAny[SETTINGS_KEY] !== undefined) { setUserSettings(winAny[SETTINGS_KEY]); return; }
+  const currentUserId = (typeof Xrm !== "undefined" &&
+    Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
+    ?.replace("{", "").replace("}", "");
+  if (!currentUserId) return;
+  let cancelled = false;
+
+  // Share one in-flight fetch across the two host mounts.
+  let pending = winAny[SETTINGS_INFLIGHT] as Promise<any> | undefined;
+  if (!pending) {
+    pending = dataApi.retrieveRow("usersettings" as any, {
+      id: currentUserId,
+      select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
+               "currencysymbol", "dateformatstring", "dateseparator"] as any,
+    })
+      .then((settings: any) => { winAny[SETTINGS_KEY] = settings; return settings; })
+      .finally(() => { if (winAny[SETTINGS_INFLIGHT] === pending) delete winAny[SETTINGS_INFLIGHT]; });
+    winAny[SETTINGS_INFLIGHT] = pending;
+  }
+  pending
+    .then((settings: any) => { if (!cancelled) setUserSettings(settings); })
+    .catch((error: any) => { if (!cancelled) console.error("Failed to fetch user settings", error); });
+
+  return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dataReady]);
+```
+
+Provide formatting helpers that use these settings. **NEVER hardcode date formats or currency symbols.**
+
+**CRITICAL rules for formatting:**
+- Do NOT use `Intl.NumberFormat` with a hardcoded currency code as the primary formatter — always use the helpers below that read from `usersettings`.
+- Do NOT display raw number or currency values — always wrap them with the appropriate formatting helper.
+- WRONG: `<span>${amount}</span>` or `{currencyValue}` — hardcodes `$` or displays raw number without locale formatting.
+- WRONG: `new Intl.NumberFormat(language, { style: 'currency', currency: 'USD' })` — hardcodes currency code; the user's currency comes from `usersettings.currencysymbol`, not from a hardcoded ISO code.
+- CORRECT: `{translate('amount')}: {formatCurrency(amount)}` — use `translate()` for labels and `formatCurrency()` for monetary values.
+
+```typescript
+const formatDate = (date: Date | string | null): string => {
+  if (!date) return "";
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (!userSettings) return d.toLocaleDateString();
+  const fmt = userSettings.dateformatstring;
+  const sep = userSettings.dateseparator;
+  if (!fmt || !sep) return d.toLocaleDateString();
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  return fmt
+    .replace(/[/\-.]/g, sep)
+    .replace(/yyyy|yy|MM|M|dd|d/g, (token: string) => {
+      switch (token) {
+        case "yyyy": return String(year);
+        case "yy": return String(year).slice(-2);
+        case "MM": return String(month).padStart(2, "0");
+        case "M": return String(month);
+        case "dd": return String(day).padStart(2, "0");
+        case "d": return String(day);
+        default: return token;
+      }
+    });
+};
+
+const formatNumber = (num: number): string => {
+  if (!userSettings?.decimalsymbol || !userSettings?.numberseparator) {
+    return num.toLocaleString();
+  }
+  const [intPart, decPart] = num.toString().split(".");
+  const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, userSettings.numberseparator);
+  return decPart ? `${formatted}${userSettings.decimalsymbol}${decPart}` : formatted;
+};
+
+const formatCurrency = (amount: number): string => {
+  if (!userSettings?.currencysymbol) {
+    return formatNumber(amount);
+  }
+  return `${userSettings.currencysymbol}${formatNumber(amount)}`;
+};
+```
+

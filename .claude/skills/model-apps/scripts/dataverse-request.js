@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+
+// General-purpose Dataverse OData Web API wrapper with built-in auth + retry.
+// Use this as an escape hatch when a higher-level operation script
+// (provision-entities.js / provision-solution.js) does not cover what you need.
+//
+// Usage:
+//   node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers]
+//
+// Arguments:
+//   envUrl   - Dataverse environment URL (https://org.crm.dynamics.com)
+//   method   - GET | POST | PATCH | DELETE
+//   apiPath  - Path after /api/data/v9.2/ (e.g. "EntityDefinitions(LogicalName='account')"). A path
+//              that would leave that root is refused before a token is read; a '..' segment counts
+//              whether written plainly, percent-encoded or joined by an encoded slash (%2F, %5C).
+//
+// Options:
+//   --body <json|@path>   Inline JSON or @filepath to a JSON file
+//   --include-headers     Include response headers (useful for OData-EntityId on POST)
+//   --timeout <ms>        Override default 60s timeout
+//
+// Output (stdout, JSON):
+//   { "status": 200, "data": { ... } }
+//   With --include-headers: { "status": 200, "data": { ... }, "headers": { ... } }
+//
+// Exit codes:
+//   0 - Request completed (check status field for HTTP result)
+//   1 - Fatal error (no token, invalid args, network failure after retries)
+
+const { dataverseRequest, parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth');
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers] [--timeout <ms>]';
+  // `--include-headers` is a genuine boolean switch; --body and --timeout both carry values.
+  const flagError = validateFlags(argv, {
+    known: ['body', 'include-headers', 'timeout'],
+    needValue: ['body', 'timeout'],
+    hints: { timeout: 'a positive millisecond value (for example, --timeout 60000)' },
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  if (positional.length < 3) {
+    process.stderr.write(USAGE + '\n');
+    process.exit(1);
+  }
+
+  const [envUrl, methodRaw, apiPath] = positional;
+  const method = methodRaw.toUpperCase();
+  const body = flags.body !== undefined ? readJsonArg(flags.body) : null;
+  const includeHeaders = flags['include-headers'] === true;
+
+  let timeout = undefined;
+  if (flags.timeout !== undefined) {
+    const parsed = Number(flags.timeout);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);
+      process.exit(1);
+    }
+    timeout = parsed;
+  }
+
+  try {
+    const res = await dataverseRequest(envUrl, method, apiPath, body, { includeHeaders, timeout });
+    process.stdout.write(JSON.stringify(res) + '\n');
+    process.exit(0);
+  } catch (e) {
+    process.stderr.write(e.message + '\n');
+    process.exit(1);
+  }
+}
+
+main();

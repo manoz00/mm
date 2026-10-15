@@ -1,0 +1,774 @@
+# Generative Pages Code Generation Rules Reference
+
+Comprehensive rules for generating generative page code. Read this file during code generation (Step 6).
+
+---
+
+## Critical Rules
+
+1. **React 17 + TypeScript**: All code must use React 17 with TypeScript
+2. **Fluent UI V9**: Use `@fluentui/react-components` (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat` — both require `mountNode` prop)
+3. **Single File**: All code (components, utilities) in one file; each as separate top-level function (no nesting)
+4. **Limited Imports**: Only React, Fluent UI V9, FluentUI icons, and D3.js for charts
+5. **DataAPI**: ONLY use when explicit TableRegistrations provided; otherwise use mocked data
+6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
+7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
+8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
+9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
+10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
+11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
+12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
+13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
+14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
+15. **Data fetching — de-dupe + cache, and NEVER `dataApi` in a dependency array (any real host read on mount)**: The genpage host (a) hands a **new `dataApi` reference every render** and (b) **double-mounts the page on open** — a cache-bypassing re-mount ~300ms after the first. Both make a naive on-mount fetch run 2+ times → double fetch + spinner re-flash. Fixes: **(1)** Never put `dataApi` in a `useEffect`/`useMemo`/`useCallback` dependency array, and never `useCallback` a fetch function — it re-fires the effect on every render. Depend on a **readiness boolean** (`const dataReady = !!dataApi;`) plus `recordId`/`reloadKey` as needed. **(2)** Wrap the fetch in the **in-flight-promise de-dupe + `window` cache** pattern in `references/data-caching.md` so concurrent mounts share ONE round-trip and later mounts read cache. The in-flight de-dupe — not the dep array — is what defeats the host double-mount (correct deps alone do NOT). Apply to **any page that fetches data on mount through a real host read**, including Dataverse reads, connector reads (`queryConnectorTable` / `executeConnectorOperation`), and single-visit overviews/dashboards. **Skip only pages that render inline mock arrays and forms with no initial fetch.** See the reference for the full pattern.
+16. **Overlays must be confined to the page container (`mountNode`)**: The generated page shares the DOM with the genpage *designer* — the preview is NOT an isolated iframe. Every Fluent surface that renders through a portal (`Dialog` via `DialogSurface`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body` of the **designer**, so without a `mountNode` it escapes the preview and can cover the designer chrome — including the coding-agent panel. Establish a single `containerRef`/`mountNode` on the page root and thread it to every overlay. See **Special Patterns > Dialogs and Overlays**.
+17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
+18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
+19. **All hooks above every early return — no conditional hook calls**: Detail/record pages crash with **minified React error #310** ("rendered more/fewer hooks than the previous render") on the *first* open of a record, then work on the second click. Cause: a hook — usually a `useMemo` deriving chart points or display rows from loaded data — sits *below* a loading/empty early return (`if (data.loading) return <Spinner/>`). On the first render data is still loading, the component early-returns and never reaches that `useMemo` (fewer hooks); when data arrives it renders past the return and calls the extra hook → the hook count differs between renders → #310. The "works the second time" intermittency (the cached render skips the loading branch) is the signature of this bug. **Fix:** place every `useMemo`/`useState`/`useEffect`/`useCallback` **above all early returns**, and make derived memos tolerate not-yet-loaded data (read from an always-initialized value, e.g. `data.rows ?? []`). Early returns are fine — they just must come *after* the last hook call. This is the React rules of hooks: never call a hook below a conditional `return`.
+20. **Never put `...` alone on a line**: Write the spread/rest token and its operand together (`...rows`, not `...` followed by `rows` on the next line).
+21. **End final type-argument statements with `;`**: If the file's last statement ends in a type argument list (`Page<string>`, `Array<Row>`), terminate it with a semicolon.
+
+---
+
+## Supported Libraries
+
+Only the generated `package.json` dependencies below are available. Do NOT use
+any other library. `scripts/lib/supported-dependencies.js` is the source of
+truth for names, versions, and feature gates; this example is validated against
+that module by `scripts/tests/supported-dependencies-docs.test.js`.
+
+```json
+{
+  "dependencies": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "2.0.326",
+    "d3": "^7.8.5",
+    "@fluentui/react-datepicker-compat": "^0.4.50",
+    "@fluentui/react-timepicker-compat": "^0.2.40"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/react": "^17.0.80",
+    "@types/react-dom": "^17.0.25",
+    "@types/d3": "^7.4.3"
+  }
+}
+```
+
+Feature-gated packages are installed only when the generator receives the
+matching flag: `charts` adds `d3` and `@types/d3`, `datepicker` adds
+`@fluentui/react-datepicker-compat`, and `timepicker` adds
+`@fluentui/react-timepicker-compat`.
+
+**CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` and TimePicker from `@fluentui/react-timepicker-compat` (NOT from `@fluentui/react-components`)
+
+---
+
+## Component Structure
+
+Standard component pattern:
+
+```typescript
+import {useEffect, useState} from 'react';
+import type {
+  TableRow,
+  DataColumnValue,
+  RowKeyDataColumnValue,
+  QueryTableOptions,
+  ReadableTableRow,
+  ExtractFields,
+  GeneratedComponentProps
+} from "./RuntimeTypes";
+
+// Additional imports: @fluentui/react-components, @fluentui/react-icons, @fluentui/react-datepicker-compat, d3
+
+// Utility functions as separate top-level functions
+
+// Sub-components as separate top-level functions
+
+const GeneratedComponent = (props: GeneratedComponentProps) => {
+  const { dataApi, pageInput } = props;
+  // Component implementation
+}
+
+export default GeneratedComponent;
+```
+
+---
+
+## Layout and Styling
+
+### Design Principles
+- Follow Microsoft Fluent Design System principles
+- Use sentence case for all text
+- Use theme tokens (e.g., `tokens.spacingVerticalXL`, `tokens.colorNeutralBackground1`)
+- `makeStyles` for styling; inline styles only for dynamic values
+- Group content in sections for visual separation
+
+### Responsive Design
+- Mobile-first; adapt to 320px, 480px, 768px, 1024px, 1440px breakpoints
+- Use relative units (%, rem, em); avoid fixed widths
+- Root container is flex column; use flex properties to fill space
+- `boxSizing: border-box`; images: `max-width: 100%, height: auto`
+- NEVER use `100vh`/`100vw` — the page is hosted inside the designer, not the full window; viewport units (and `position: fixed` overlays) size to the whole designer and bleed over the agent panel
+- **Media queries go INSIDE the slot they modify** — never as a top-level
+  `makeStyles` key. Griffel compiles each top-level key as an independent
+  class, so a top-level `'@media (...)'` slot generates an unused class
+  (its overrides never apply) and also fails type-checking. Nest the query
+  in each slot and override only that slot's properties:
+```typescript
+const useStyles = makeStyles({
+  // CORRECT: @media nested inside the slot
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    '@media (max-width: 768px)': { gridTemplateColumns: '1fr' },
+  },
+  // WRONG: @media as a top-level key reaching into other slots
+  // '@media (max-width: 768px)': { grid: { gridTemplateColumns: '1fr' } },
+});
+```
+
+### Page Layout
+- Page-level functions (nav, search, filters) in header opposite title
+- Only scrollable bodies scroll, not entire page
+- Fix height of parent, set overflow on content area
+- Consistent padding/spacing; strong text contrast
+- Include hover/focus/active states
+
+### Scrollable Areas
+- Use fixed `maxHeight` for parent + `overflow: auto` for scrollable area
+- Calculate `maxHeight: calc(100% - [fixed element heights])`
+- Only content area scrolls, never entire page
+- Example:
+```typescript
+<div style={{ maxHeight: 'calc(100% - 100px)', overflow: 'auto' }}>
+  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    {/* scrollable content */}
+  </div>
+</div>
+```
+
+### Navigation
+- Multiple screens within a page: Use Fluent UI V9 Tabs/Breadcrumbs
+- Provide back/forward navigation for wizard flows
+- No React Router or hash/history API routing
+
+### User-Provided Mockups/Screenshots
+- When user provides mockups, those take precedence for layout, structure, and visual design
+- Follow the provided design closely while adapting to Fluent UI V9 components
+- Maintain all technical constraints: accessibility (ARIA, keyboard nav, WCAG AA), responsive design, proper semantic HTML
+- If the mockup conflicts with accessibility or responsive design requirements, prioritize accessibility while staying as close to the visual design as possible
+- Translate design elements to equivalent Fluent UI components (e.g., custom buttons -> Fluent Button with appropriate styling)
+
+---
+
+## Accessibility
+
+- Use semantic HTML elements (`button`, `nav`, `main`, `section`, etc.)
+- Add `aria-label` to icon-only buttons and interactive elements
+- Use `aria-labelledby`/`aria-describedby` for form sections
+- Ensure text contrast meets WCAG AA standards (use theme tokens)
+- Include keyboard navigation support (tab order, enter/space for actions)
+- Example:
+```typescript
+<Button aria-label="Delete item" icon={<DeleteRegular />} />
+<section aria-labelledby="form-title" aria-describedby="form-desc">
+  <Text id="form-title">Account Form</Text>
+</section>
+```
+
+---
+
+## Localization
+
+Localization guidance has been moved to a separate reference that is loaded
+**conditionally** — only when `scripts/list-languages.js` (or its fallback, `pac model list-languages --environment '<envUrl>'`) reports multiple
+configured languages OR any non-English language. For English-only environments,
+skip this entirely.
+
+See: `${PLUGIN_ROOT}/references/localization.md`
+
+
+---
+
+## Page Input
+
+The generated component receives an optional `pageInput` prop from the hosting
+page (selected record context, custom data). Already in `GeneratedComponentProps`
+— destructure with `const { dataApi, pageInput } = props;`.
+
+### Interface
+
+```typescript
+export interface PageInput {
+    entityName?: string;   // logical name (not display name)
+    recordId?: string;     // record GUID
+    data?: Record<string, unknown>;  // custom values — primitives only, type unknown
+}
+```
+
+### Rules
+
+- Only use `pageInput` when the user explicitly asks — don't speculate on inputs.
+- Never set defaults for missing `pageInput` fields.
+- `data` values are unknown-typed primitives — cast robustly, never assume.
+
+### Rendering pattern (avoid double-render flicker)
+
+`pageInput` is available synchronously on the first render via `Xrm.Navigation.navigateTo`:
+
+- **Derive synchronously from props**, not `useState`. State init triggers re-renders.
+- **Early-return** if a required field is missing — no conditional wrapper divs.
+- **No `setTimeout` or `pageInputReady` flags** — 500ms delays let the platform fall back to the previous page.
+- **Initialize `loading: true`** when `recordId` is present — spinner on frame 0, not blank-flip-to-spinner.
+
+### Example — record context
+
+```typescript
+const { dataApi, pageInput } = props;
+const recordId = pageInput?.recordId;
+const entityName = pageInput?.entityName;
+const dataReady = !!dataApi;   // never depend on `dataApi` itself — see Rule 15
+const [row, setRow] = useState(undefined);
+
+useEffect(() => {
+    if (entityName === "account" && recordId && dataReady) {
+        // Full pages should also de-dupe the host double-mount — see
+        // references/data-caching.md. Kept minimal here for the illustration.
+        (async () => {
+            const r = await dataApi.retrieveRow("account", {
+                id: recordId,
+                select: ["statuscode", "name", "_primarycontactid_value"],
+            });
+            setRow(r);
+        })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dataReady, entityName, recordId]);
+```
+
+### Example — `data` with safe casting
+
+```typescript
+function toNumberOrDefault(v: unknown, fallback: number): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+        const parsed = Number(v);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
+}
+
+const { pageInput } = props;
+const [lat] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
+const [lng] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
+```
+
+---
+
+## Special Patterns
+
+### Dialogs and Overlays
+
+**Why this matters:** the generated page renders into the **same document as the genpage designer** — the preview is not a sandboxed iframe. Any Fluent component that renders through a portal (`Dialog`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body`. In a normal app that's the page; in the designer that's the **whole tool**. A default `<Dialog>` (`modalType="modal"`) additionally paints a `position: fixed` backdrop and traps focus across the entire window. The result is the #1 reported genpage failure: a modal that **covers the designer and the coding-agent panel on the left, and can't be dismissed** — the user is locked out and can't even ask the agent to remove it.
+
+Three rules prevent it:
+
+1. **Thread a `mountNode` to every overlay** so the portal stays inside the page's own container.
+2. **Make the page root a containing block** (`position: relative` + `contain: layout`) so any `position: fixed` descendant is clipped to the page, never the designer.
+3. **Default dialogs to `modalType="non-modal"`** (no blocking scrim), or use an in-page panel. Never nest a `<Dialog>` inside another `<Dialog>`.
+
+```typescript
+const GeneratedComponent = (props: GeneratedComponentProps) => {
+    const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
+    // Callback ref captures the container the instant it mounts (before paint), so
+    // mountNode is set before any user-opened dialog renders — no window where the
+    // portal falls back to the designer's document.body. (Prefer this over a useEffect,
+    // whose first-paint gap leaves mountNode null if a dialog opens immediately.)
+    const setContainer = useCallback((node: HTMLDivElement | null) => setMountNode(node), []);
+
+    const [open, setOpen] = useState(false);
+
+    return (
+        // contain: 'layout' makes this div the containing block for any fixed-position overlay
+        <div ref={setContainer} style={{ position: "relative", contain: "layout", height: "100%", overflow: "hidden" }}>
+            {/* ...page content... */}
+
+            {/* Sibling dialog at top level — NOT nested inside another Dialog */}
+            <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)} modalType="non-modal">
+                <DialogSurface mountNode={mountNode}>
+                    <DialogBody>
+                        <DialogTitle>Edit item</DialogTitle>
+                        {/* ...fields... */}
+                        <DialogActions>
+                            <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+                            <Button appearance="primary" onClick={() => setOpen(false)}>Save</Button>
+                        </DialogActions>
+                    </DialogBody>
+                </DialogSurface>
+            </Dialog>
+        </div>
+    );
+};
+```
+
+- `mountNode` goes on **`DialogSurface`** (not `Dialog`). For `Popover`/`Menu`/`Tooltip` pass `mountNode` to the component; for `Combobox`/`Dropdown` use the same `mountNode`; for `DatePicker`/`TimePicker` the `mountNode` prop is already required (see sample 6).
+- If a dialog genuinely must block the page (rare), keep `modalType="modal"` **but still** pass `mountNode` and rely on the `contain: layout` root so the scrim is clipped to the page, not the designer.
+- **Multiple dialogs:** declare each as a separate top-level `<Dialog>` switched by its own state flag. Never render one `<Dialog>` inside another's JSX tree.
+
+### Generative Page Navigation
+
+Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction (`window.location`, query strings) breaks the hosting context and must not be used — not even as a fallback.
+
+```typescript
+const xrm = (window as any).Xrm;
+
+// Another generative page with record context (entityName and recordId arrive as props.pageInput)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId });
+
+// Another generative page with custom data (arrives as props.pageInput.data on the target)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, data: { customParam1: "value1", customParam2: 42 } });
+
+// Combining record context with additional custom data
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId, data: { view: "summary" } });
+```
+
+**CRITICAL — never use `pageType: "entityrecord"` or `pageType: "entitylist"` to navigate to another generative page.** Those open the standard OOB form/list, not the custom page. Always use `pageType: "generative"` with the target page's GUID.
+
+**Passing a record ID between pages:** Always put custom identifiers in `data`, not `recordId`. `recordId` is reserved for standard Dataverse record context (used by OOB forms/views); values placed there may not arrive reliably on the receiving genpage. Use `data: { accountId: selectedId }` and read it as `pageInput?.data?.accountId` on the target page. Never rely on `recordId` as the delivery channel for a custom ID.
+
+**Receiving navigation state:** On any page reachable via `navigateTo` (e.g., a detail page, or an explorer page the user navigates back to), initialize shared UI state — dark mode toggle, active filters, selected view — from `pageInput.data` first. URL params are a valid secondary source (e.g., for bookmarked URLs or direct links), but `pageInput.data` takes priority because `navigateTo` does not populate URL params. Pattern:
+
+```typescript
+// CORRECT — pageInput.data takes priority; URL param is a valid fallback
+const isDark =
+    pageInput?.data?.darkMode === true || pageInput?.data?.darkMode === "true"
+        ? true
+        : pageInput?.data?.darkMode === false || pageInput?.data?.darkMode === "false"
+        ? false
+        : new URLSearchParams(window.location.search).get("darkMode") === "true";
+const [isDarkMode, setIsDarkMode] = useState(isDark);
+```
+
+#### Multi-page builds: use `PAGEREF_<token>` placeholders
+
+In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
+`PAGEREF_<token>` placeholder as the `pageId`. The build replaces these with real GUIDs in a
+resolved deployment copy after all pages are deployed; your canonical `.tsx` keeps the symbolic
+token (the build never writes a GUID back into it).
+
+**The token depends on the caller — read the plan's `## Environment` `Mode:` line:**
+
+| `Mode:` | Token | Why |
+|---------|-------|-----|
+| `app-builder` | the target page's **`Key`** (the `Key` column in `## Pages`, = App Spec `pages[].key` = `navigatesTo[].targetKey`) | Rename-stable, and a downloaded page's file is a storage path (`pages/<guid>/page.tsx`) whose stem means nothing |
+| absent (standalone `/genpage`) | the target page's **file name without `.tsx`**, exactly as in the `File` column | There is no App Spec, so there are no keys and the plan has no `Key` column; Phase 6.5 builds a filename-stem → page-id map |
+
+```typescript
+// Navigating to a sibling page — pass any custom id in `data` (never recordId)
+xrm.Navigation.navigateTo({
+    pageType: "generative",
+    pageId: "PAGEREF_pet-gallery",   // app-builder: target's Key. standalone: target's file stem.
+    data: { selectedPetId: selectedId },   // custom ids go in data (read as pageInput?.data?.selectedPetId)
+});
+```
+
+**Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
+`PAGEREF_<token>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
+`navigateTo` call** — the value is exactly that one string literal, with nothing after it but the
+`,` or `}` that ends the property (a plain cast — `as const`, `as Name`, `satisfies Name`, with `Name` a plain or dotted
+identifier — may follow the literal and is left as written; a generic, a union or a string-literal type may not). The options
+object has to be **written inline in the call**: an object built in a variable and passed by name is not recognised, and
+its token halts the build as stray. **Write the plain form, `navigateTo({ … })` or
+`Xrm.Navigation.navigateTo({ … })`.** A parenthesised callee, `(navigateTo)({ … })`, is read only where a call can
+start — at the start of a statement or after `;` `{` `(` `[` `,` `:`, a ternary `?`, an operator ending in `=`, `=>`,
+`&&`, `||` or `??`, or the keyword `return` on the same line (`return (navigateTo)({ … })`; not `await` or `yield`) — and never
+after a name or any other keyword, `)`, `]`, `.`, `}`, `!`, `>`, a quote or a back-tick, because
+there the parentheses are an argument list for some other function (`factory!(navigateTo)({ … })`,
+``tag`x`(navigateTo)({ … })``); the token in one halts the build as stray. Always emit it exactly there — never single-quoted, back-ticked,
+concatenated, followed by an expression (`"PAGEREF_x".slice(8)`, `&& other`,
+`("PAGEREF_x" as const).slice(1)`), in a
+`pageType` that is not the plain literal, in a call spelled some way the resolver does not read, or
+as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref, any `PAGEREF_`
+token that is not a resolvable nav pageId — **no comment may hold one**: a `//` comment, a block comment, a trailing comment
+(`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` are all refused, so write the comment without the token — and any
+parity mismatch, and reports the page, line and column). Also keep the code before a navigation call unambiguous: the checker has
+no parser, so where it cannot tell a division from a regex, or a comparison from an element — a `/` or `<` right after a `}`
+(write `({ … }) / 2`, not `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`,
+`type`, `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a regex line);
+an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after that spot, or a `navigateTo` call
+whose object or arguments reach it. Put the operand in parentheses, end the statement with `;`, or write the navigation call above it. In `app-builder` mode every `PAGEREF_<key>` you emit must have a
+matching `navigatesTo` entry in the page's spec, and every declared `navigatesTo.targetKey` must
+appear as a real nav pageId in the source (the build enforces exact parity, and verification
+confirms each edge resolves to the actual target).
+
+**Every `PAGEREF_` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
+A page referenced by a `PAGEREF_` placeholder must have a matching `page` subarea in the
+app's `appShell`. Navigation-only pages — reachable only via a `PAGEREF_` call but absent from the
+app sitemap — are not supported; validation rejects them. A "detail" page that receives a caller-
+supplied record id or other context is a normal sitemap page; it reads its input via
+`pageInput?.data?.<field>`. See [`app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`
+for the three-authority identity model and the `pages[].pageId` edit-snapshot field.
+
+### Dark Mode Toggle
+
+Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use a local `themeToVars` helper to apply theme tokens synchronously as CSS custom properties.
+
+**Implement `themeToVars` locally** — do not import it from `@fluentui/react-components`:
+
+```typescript
+function themeToVars(theme: Record<string, string>): React.CSSProperties {
+    const vars: Record<string, string> = {};
+    Object.entries(theme).forEach(([k, v]) => { vars[`--${k}`] = v; });
+    return vars as React.CSSProperties;
+}
+```
+
+**Use a two-div wrapper.** Applying both `style={themeToVars(...)}` and `className={styles.root}` to the same div causes a CSS variable self-reference flicker because `makeStyles` reads the same CSS custom properties that `themeToVars` is writing. Separate them: outer div sets the vars, inner div reads them via the class:
+
+```typescript
+import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
+
+// WRONG — style and className on the same div causes CSS variable self-reference flicker
+<div style={themeToVars(theme)} className={styles.root}>
+
+// CORRECT — outer div sets CSS vars only, inner div reads them via className
+// CRITICAL: outer div MUST have height: 100% and overflow: hidden so the inner
+// div can scroll. Without this, the page content overflows invisibly with no scrollbar.
+<div style={{ ...themeToVars(isDarkMode ? webDarkTheme : webLightTheme), height: "100%", overflow: "hidden" }}>
+    <div className={styles.root}>
+        {/* all Fluent descendants inherit the theme via CSS variables */}
+    </div>
+</div>
+```
+
+**Root div scrolling:** The inner `styles.root` div must have `height: "100%"` and `overflowY: "auto"` so the page content is scrollable. The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable.
+
+**Inherited text color does NOT follow the variable override.** `themeToVars` overrides CSS *variables*, but Fluent typography (`Text`, `Title`, `Body`, etc.) mostly **inherits** its `color` from the light-theme FluentProvider root — and inheritance passes the already-resolved value, so flipping `--colorNeutralForeground1` to white does not recolor inherited text (you get near-black text on a dark background, contrast ~1.07, effectively invisible). **Fix:** set `color: tokens.colorNeutralForeground1` on the page root (`styles.root`) so every descendant inherits the variable-resolved foreground. Raw `<button>` elements (e.g. custom "attention" rows) default to black `buttontext` and need an explicit `color` too. Status-color CSS vars (`--colorStatusDangerForeground1`, etc.) *do* resolve in inline styles via the `themeToVars` wrapper, so status tokens work fine.
+
+**Pages opened via `navigateTo` are separate documents — they don't inherit the dashboard's dark mode.** A detail/dialog page reached through `Xrm.Navigation.navigateTo({ pageType: "generative", ... })` mounts fresh with no theme context. Pass the flag through `data` (`data: { darkMode: isDarkMode }`) and, on the target, read it from `pageInput.data` (see **Generative Page Navigation > Receiving navigation state**) and wrap the component in its own `themeToVars` two-div. A thin outer wrapper component is cleanest when the target page has multiple early-returns.
+
+### Styling gotchas (Fluent + Griffel)
+
+Recurring CSS bugs that type-check and compile but render wrong. Check for these before finishing a page:
+
+1. **A bar/progress fill `<span>` with a `width`/`height` % but no `display` is invisible.** A `<span>` defaults to `display: inline`, which ignores width/height → a 0×0 box, so the colored fill never paints (only the track shows — looks like "the color got lost"). Symptom: computed `backgroundColor` is correct but `offsetWidth`/`offsetHeight` is `0`. Fix: add `display: "block"` (or `inline-block`) to the fill — or use a `<div>` for fills.
+2. **Concatenated `makeStyles` classes lose status/warning colors to a shorthand-vs-longhand collision.** ``className={`${base} ${warning}`}`` (plain template string, not `mergeClasses`) where `base` sets a shorthand `border:` / `backgroundColor: "transparent"` and `warning` sets the longhand `borderTopColor` / `backgroundColor` — Griffel's atomic output plus the shorthand-vs-longhand cascade lets the base win, so the amber bg/border/text silently fall back to neutral. Fix: apply the status colors **inline** (`style={{ backgroundColor: tokens.colorStatusWarningBackground1, borderColor: tokens.colorStatusWarningBorder1 }}` — inline wins) or use `mergeClasses` instead of string concatenation.
+3. **`tokens.fontFamilyNumeric` is Bahnschrift, not Segoe UI.** Using it for tabular numbers (counts, %, ranks, dates) renders those digits in Bahnschrift — visibly mismatched against Segoe UI everywhere else. Fix: use `tokens.fontFamilyBase` and keep `fontVariantNumeric: "tabular-nums"` for aligned digits.
+4. **Gradient hero with white text: `colorPalette*Background2/3` tokens are light tints, not dark.** A gradient built from e.g. `colorPalettePurpleBackground3` / `colorPaletteTealBackground2` with `color: colorNeutralForegroundOnBrand` (white) renders white-on-light → unreadable; those `Background2/3` palette tokens are pale. Fix: build the gradient from the dark, saturated `colorPalette*Foreground2` stops (e.g. `colorPalettePurpleForeground2`, `colorPaletteTealForeground2`), which are dark enough for white text to pass AA.
+5. **Ten CSS shorthands are unsupported by Griffel — `borderWidth` is the usual one.** Griffel does not support ten CSS shorthands, and `makeStyles` drops them at runtime: the page type-checks, transpiles and deploys, then renders without the border, color or reset. They are `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`, `borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width` (`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End` forms become the `Width`, `Style` and `Color` longhands of the sides they name (`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`, `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…` ones); `all` has no longhands, so set the properties you need one by one. Every other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`, `outline`) is supported, and an inline `style={{ … }}` is not Griffel at all. The browser console logs `@griffel/react: You are using unsupported shorthand CSS property "<name>"` for each one that reaches it. Run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<page.tsx>'` on the finished page. `check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles` call, at any depth, with its line, column and longhands, or a call or a style object it cannot read, with what to change — and exits 3 while any is left: fix what it reports and run it again, and do not transpile or upload the page until it exits 0. It reads the style objects written inline in the call, `makeStyles({ … })`, so write them there: one passed or spread in from elsewhere (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its keys, and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+### Data Fetching: the host double-mount, de-dupe, and caching
+
+Two host behaviors make a naive on-mount fetch run more than once:
+
+1. **Double-mount on open.** The PowerApps webplayer host launches the hosted app twice when a generative page opens — a cached mount, then a cache-bypassing re-mount ~300ms later (two `POST .../powerapps/apps/<app>/launch` calls, the second `bypass-cache=true`). Each fresh mount re-runs the data effect **even with a correct dependency array**.
+2. **Module re-evaluation on navigation.** Navigating back to a visited page re-evaluates the module script, resetting module-level variables (`let _cache = null`).
+
+`window` survives both (the second mount runs in the same window), so the fix lives on `window`:
+
+- **In-flight promise** (`window.__pp<EntityName>Inflight`) — concurrent mounts share ONE pending fetch, so the double-mount is a single round-trip. This is the piece that defeats the double-mount; the dependency array cannot.
+- **Resolved cache** (`window.__pp<EntityName>Cache`) — later mounts and return visits read cache: no re-fetch, no spinner.
+
+**Key rules:**
+- **Never put `dataApi` in a dependency array** (`useEffect`/`useMemo`/`useCallback`) and never `useCallback` a fetch function — the host hands a new `dataApi` ref every render, so it re-fires the effect each render. Depend on a **readiness boolean** (`const dataReady = !!dataApi;`) plus `recordId`/`reloadKey` as needed.
+- **Scope each `window` key by page + query** (include the page name, e.g. `__ppAccountOverview_accountCache`), not just the entity — two pages querying the same entity with different `select`/`filter` must not share a cache or in-flight entry.
+- Seed initial `useState` from the `window` cache so the second mount paints final content with no spinner.
+- Use a single batched state object (`{ records, loading, error }`) — separate `setState` calls in async functions produce intermediate renders in React 17.
+- For detail pages, key both the cache and the in-flight map by `recordId` (`Map<string, ...>` on `window`).
+- On mutation or manual refresh, clear the cache **and** the in-flight promise before refetching.
+
+**When to apply:** any page that fetches data on mount through a real host read — Dataverse `dataApi` calls OR connector calls such as `queryConnectorTable` / `executeConnectorOperation` (lists, details, and single-visit overviews/dashboards). Skip only pages that render inline mock arrays and forms with no initial fetch.
+
+See [`references/data-caching.md`](./data-caching.md) for the complete list and detail patterns.
+
+### Charts and Visualization
+- Use D3.js for all charts
+- D3 uses `group()` not `nest()`
+- Include tooltips, hover states, click behaviors
+- Smooth transitions (300-500ms)
+- **D3 animation guard (required):** The genpage runtime may re-evaluate modules or remount components, causing D3 transitions in `useEffect` to replay visibly. Any D3 animation (arc tweens, number counters, bar transitions, etc.) must use a `window`-level flag to ensure the animation runs only once. On subsequent effect invocations, draw the final state immediately. Also add an early-return guard if the SVG already contains rendered content. Pattern:
+  ```typescript
+  const ANIM_KEY = "__ppMyChartAnimated";
+  function MyChart(props: { value: number }) {
+      const svgRef = useRef<SVGSVGElement>(null);
+      useEffect(() => {
+          if (!svgRef.current) return;
+          const svg = d3.select(svgRef.current);
+          const w = window as any;
+          // Skip entirely if already drawn
+          if (w[ANIM_KEY] && svg.selectAll("path").size() > 0) return;
+          const shouldAnimate = !w[ANIM_KEY];
+          w[ANIM_KEY] = true;
+          svg.selectAll("*").remove();
+          // ... draw chart ...
+          if (shouldAnimate) { /* .transition().duration(800)... */ }
+          else { /* draw final state directly */ }
+      }, [props.value]);
+  }
+  ```
+  Use a unique `ANIM_KEY` per chart component (e.g., `"__ppScoreGaugeAnimated"`, `"__ppBarChartAnimated"`). Do NOT use `useRef` or module-level variables for the flag — neither survives runtime module re-evaluation.
+
+### Image Generation
+- You CANNOT generate images or media files
+- If user requests an image, create similar visuals using SVG and CSS
+- Add styling/animations to make SVG/CSS graphics visually appealing
+- NEVER use external image URLs or libraries unless user explicitly requests it
+
+### File Upload (Fluent UI V9 has no file uploader component)
+```typescript
+const fileInputRef = useRef<HTMLInputElement>(null);
+const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+
+const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  if (event.target.files) {
+    setUploadedFiles(prev => [...prev, ...Array.from(event.target.files)]);
+  }
+};
+
+return (
+  <>
+    <input
+      type="file"
+      multiple
+      ref={fileInputRef}
+      onChange={handleFileUpload}
+      style={{ display: "none" }}
+    />
+    <Button onClick={() => fileInputRef.current?.click()}>
+      Upload Files
+    </Button>
+    {/* Display uploaded files list */}
+  </>
+);
+```
+
+---
+
+## DataAPI Rules
+
+**CRITICAL - MUST FOLLOW ALL:**
+
+1. **Only use dataApi when TableRegistrations provided** - NEVER assume tables/entities/fields exist
+2. **NEVER guess column names** - Always verify from the generated RuntimeTypes.ts schema. Custom entities have unpredictable column names (e.g., `cr69c_fullname` not `cr69c_name`). Generate schema first, read it, then write code.
+3. **Entity logical names** - Singular lowercase (e.g., `"account"`)
+4. **Only defined fields** - Reference only columns that exist in the generated schema
+5. **Mocked data fallback** - If no types provided, use sample data
+6. **No placeholder CRUD** - Don't include CRUD calls without proper types
+7. **No dynamic column generation** - Don't generate DataGrid columns from assumed schemas
+8. **Preserve API signatures** - Don't rename dataApi methods/parameters
+9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
+10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
+11. **queryTable returns `{ rows: T[] }`, NOT a raw array** — `dataApi.queryTable()` returns a `DataTable<T>` object with `.rows`, `.hasMoreRows`, and `.loadMoreRows()`. Always access the records via `result.rows`. `retrieveRow()` returns the row object directly (no wrapper).
+12. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
+
+
+```typescript
+// WRONG — causes runtime error
+select: ["subject", "regardingobjectidname"]
+
+// CORRECT — select FK column, read display name from annotation
+select: ["subject", "_regardingobjectid_value"]
+const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedValue"];
+```
+
+13. **Setting a lookup on create/update — use `_<field>_value`, never `@odata.bind`** - To *write* a lookup via `createRow`/`updateRow`, set the FK key `_<field>_value` to a string of the form `/<entityLogicalNameSingular>(<guid>)` — singular logical name (e.g. `/account(<id>)`, `/systemuser(<id>)`). Clear it with `_<field>_value: null`. The writable row type in RuntimeTypes proves the shape — the FK column is typed as a template literal, e.g. `` _primarycontactid_value: `/contact(${string})` ``. **The trap:** the raw Dataverse Web API binds lookups with `"<PascalCaseNavProp>@odata.bind": "/<entitySetPlural>(<id>)"`. The DataAPI **silently ignores** any `@odata.bind` key (unknown property → dropped, no error) and creates the row **orphaned**, with the lookup null. Symptom: `createRow` resolves with no error, but the row isn't linked, so a child list filtered by that parent stays empty — looks like "the write didn't save." Don't mix the conventions: **DataAPI → `_field_value: "/logicalSingular(id)"`**; `@odata.bind` + `/setPlural(id)` is for raw Web API only.
+
+```typescript
+// WRONG — DataAPI silently drops @odata.bind → row created with null lookup (orphaned)
+await dataApi.createRow("task", { subject: "Call", "Regarding@odata.bind": "/accounts(<id>)" });
+
+// CORRECT — set the FK _value to "/logicalSingular(guid)"
+await dataApi.createRow("task", { subject: "Call", _regardingobjectid_value: `/account(${accountId})` });
+await dataApi.updateRow("task", id, { _regardingobjectid_value: null }); // clear it
+```
+
+### DataGrid Requirements
+- Import `createTableColumn` from Fluent UI V9
+- Define all columns using `createTableColumn`
+- Enable column sorting by default (use `sortable: true` on columns)
+- Enable column filtering when appropriate for user data exploration
+- Don't connect to Dataverse without explicit table registrations
+- Use mocked data if no data source provided
+- **Column sizing — always required:** Set `columnSizingOptions` with `defaultWidth` and `minWidth` for every column, and add `resizableColumns` to the `DataGrid`. Without explicit widths the browser distributes space unevenly and variable-length content bleeds into adjacent columns.
+- **Text overflow in cells:** For any cell that may contain variable-length text (URLs, email addresses, long names, descriptions), apply truncation to the inner element and `minWidth: 0` on the `TableCellLayout` so the cell can actually shrink. Add a `title` attribute for full-value tooltip on hover:
+
+```typescript
+// CORRECT — truncates long URLs without bleeding into the next column
+<TableCellLayout style={{ overflow: "hidden", minWidth: 0 }}>
+    <a
+        href={normalizedUrl}
+        title={url}          // full value visible on hover
+        style={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+        }}
+    >
+        {url}
+    </a>
+</TableCellLayout>
+```
+
+---
+
+## DataAPI Type Definitions
+
+The canonical TypeScript types live in `./RuntimeTypes.ts`, auto-generated by
+`pac model genpage generate-types` per build with the actual entity tables,
+enum registrations, and a fully-instantiated `GeneratedComponentProps`. The
+page-builder reads that file in Step 2. **Do not duplicate the types here**
+— anything we'd write would be stale relative to the generated source.
+
+What you can rely on from RuntimeTypes:
+- `TableRow`, `ReadableTableRow<E>`, `WritableTableRow<E>` — table row shapes
+- `DataColumnValue`, `RowKeyDataColumnValue` — primitive value types
+- `QueryTableOptions<E>`, `RetrieveRowOptions<E>` — query parameter shapes
+- `TableRegistrations`, `EnumRegistrations` — env-specific table/enum maps
+- `GeneratedComponentProps` — the top-level props (includes `dataApi`, `pageInput`)
+- `BaseUxAgentDataApi<TR, ER>` — the dataApi interface with `createRow`,
+  `updateRow`, `deleteRow`, `retrieveRow`, `queryTable`, `getChoices`
+
+### Connector DataAPI (optional — only when the plan has Connector Bindings)
+
+When the plan's `## Connector Bindings` is non-empty, the page may call Power
+Platform connectors via `queryConnectorTable` (tabular) and
+`executeConnectorOperation` (REST). These are optional runtime methods — always
+presence-check before calling. See [connectors.md](./connectors.md) for the
+required patterns and the binding contract.
+
+### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
+
+When the plan's `## Custom API Bindings` contains a binding table, the page may invoke Dataverse
+**Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
+API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
+(read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the
+page's bound operations. These are optional runtime methods — always presence-check before
+calling, guard Actions against double-submit, read results from `res.outputs` (never
+`res.value`), surface only the sanitized `res.error?.message`, and never auto-retry an
+`indeterminate` result. Call only the `name`s in the plan's `## Custom API Bindings`; a name
+not bound to the page fails with `not_bound`. See [custom-api.md](./custom-api.md) for the
+required patterns, the `boundTo` rules, and the full `error.code` contract.
+
+---
+
+## DataAPI Usage Examples
+
+```typescript
+// Query
+const result = await dataApi.queryTable("table1", {
+  select: ["name", "status"],
+  filter: `contains(name,'test')`,
+  orderBy: `name asc`,
+  pageSize: 50,
+});
+// result.hasMoreRows + result.loadMoreRows() for pagination
+
+// IMPORTANT: queryTable returns DataTable<T> = { rows: T[], hasMoreRows: boolean }
+// Access the array via result.rows — it is NOT a raw array
+const records = result.rows;
+
+// Load more pages
+if (result.hasMoreRows && result.loadMoreRows) {
+  const nextPage = await result.loadMoreRows();
+  const moreRecords = nextPage.rows;
+}
+
+// Create / Update / Retrieve
+const id = await dataApi.createRow("table1", { name: "New", status: 0 });
+await dataApi.updateRow("table1", id, { name: "Updated" });
+const row = await dataApi.retrieveRow("table1", { id, select: ["name", "status"] });
+
+// Formatted values (enums, lookups, dates) — use @OData.Community.Display.V1.FormattedValue:
+const statusLabel = row["status@OData.Community.Display.V1.FormattedValue"];
+const contactName = row["_primarycontactid_value@OData.Community.Display.V1.FormattedValue"];
+
+// Enum choices
+const choices = await dataApi.getChoices("table1-status");
+```
+
+For lookups: `_<field>_value` is the GUID — never display it. Always read the
+paired `..._value@OData.Community.Display.V1.FormattedValue` for the label.
+
+---
+
+## Common Errors
+
+**Scope:** generation-time anti-patterns the page-builder must not emit.
+For deployment / runtime / env issues (PAC CLI failures, auth, browser
+verification, etc.), see `references/troubleshooting.md`.
+
+### 1. Undefined Identifier
+Every identifier must be defined or imported. Don't assume implicit availability.
+```typescript
+// Error: processData not defined
+const result = processData(data);
+
+// Fix 1: Define
+function processData(data) { return data.map(x => x * 2); }
+
+// Fix 2: Import
+import { processData } from "@package";
+```
+
+### 2. Missing Error Handling
+Always wrap async dataApi calls in try-catch.
+```typescript
+// Error: Unhandled promise rejection
+const data = await dataApi.queryTable("table1", {});
+
+// Fix: Wrap in try-catch
+try {
+  const data = await dataApi.queryTable("table1", {});
+  setRecords(data.rows);
+} catch (error) {
+  console.error("Failed to load data:", error);
+  setErrorMessage("Unable to load data. Please try again.");
+}
+```
+
+### 3. Inline Styles Instead of makeStyles
+Use `makeStyles` with tokens.
+```typescript
+// Error: Using inline styles for static styling
+<div style={{ padding: "20px", gap: "16px", display: "flex" }}>
+
+// Fix: Use makeStyles
+const useStyles = makeStyles({
+  container: {
+    display: "flex",
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingHorizontalXL
+  }
+});
+const styles = useStyles();
+<div className={styles.container}>
+```
+
+### 4. Media Queries as Top-Level makeStyles Keys
+Each top-level `makeStyles` key is compiled to an independent class. A media
+query placed at the top level becomes a class literally named
+`@media (...)`, whose nested slot overrides are never applied to any element
+— the responsive behavior silently does nothing, and it fails type-checking
+(`'<prop>' does not exist in type 'string[]'` when a slot name collides with a
+CSS shorthand). Nest the query inside each slot instead.
+```typescript
+// Error: media query as a top-level key, reaching into other slots
+const useStyles = makeStyles({
+  grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" },
+  "@media (max-width: 768px)": { grid: { gridTemplateColumns: "1fr" } }
+});
+
+// Fix: nest the media query inside the slot it modifies
+const useStyles = makeStyles({
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    "@media (max-width: 768px)": { gridTemplateColumns: "1fr" }
+  }
+});
+```
